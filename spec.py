@@ -99,7 +99,7 @@ class Spectrum(object):
 
         pl.ion()
         pl.clf()
-        self.plotspec(skyfile=skyfile, smooth=smooth)
+        self.plotspec(skyfile=skyfile, smoothwindow=smooth)
         userin=''
         print( __doc__ )
         print("z=%.3f %s"%(z,lineset))
@@ -109,19 +109,19 @@ class Spectrum(object):
             elif userin.startswith('z') :
                 z = float( userin.split()[1] )
                 pl.clf()
-                self.plotspec(skyfile, smooth=smooth, showerr=showerr)
+                self.plotspec(skyfile, smoothwindow=smooth, showerr=showerr)
                 if lineset!='none':marklines( z, lineset )
                 pl.draw()
                 print("re-plottd at z=%.3f"%z)
             elif userin.startswith('l') :
                 lineset = userin.split()[1]
                 pl.clf()
-                self.plotspec(skyfile, smooth=smooth, showerr=showerr)
+                self.plotspec(skyfile, smoothwindow=smooth, showerr=showerr)
                 if lineset != 'none' : marklines( z, lineset )
             elif userin.startswith('s') :
                 smooth = int( userin.split()[1] )
                 pl.clf()
-                self.plotspec(skyfile, smooth=smooth, showerr=showerr)
+                self.plotspec(skyfile, smoothwindow=smooth, showerr=showerr)
                 if lineset!='none': marklines( z, lineset )
             elif userin=='h':
                 print(""" 
@@ -132,62 +132,6 @@ class Spectrum(object):
     s <npix> : apply median smoothing, radius N pix
     """)
         return( z )
-
-    def plotspec(self, skyfile=None, smooth=0, showerr=False):
-        """ plot the source spectrum and the sky spectrum """
-        # medsmooth = lambda f,N : array( [ median( f[max(0,i-N):min(len(f),max(0,i-N)+2*N)]) for i in range(len(f)) ] )
-
-        specfile = self.filename
-
-        # TODO: this should be more general
-        if skyfile :
-            # lower axes : sky
-            ax2 = pl.axes([0.03,0.05,0.95,0.2])
-            skywave, skyflux = np.loadtxt( skyfile, unpack=True, usecols=[0,1] )
-            pl.plot( skywave, skyflux , color='darkgreen',
-                  ls='-', drawstyle='steps' )
-            ax1 = pl.axes([0.03,0.25,0.95,0.63], sharex=ax2)
-
-        # upper axes : source
-        # TODO : better smoothing !!!
-        # if smooth : flux = medsmooth( flux, smooth )
-        if smooth :
-            if smooth<5 :
-                smooth=5
-                order=3
-                print("raising S-G smooth window to 5, order 3.")
-            if smooth<7 :
-                order=3
-            else :
-                order=5
-            flux = savitzky_golay( self.flux, smooth, order=order )
-        else :
-            flux = self.flux
-
-        if showerr :
-            pl.errorbar( self.wave, flux/np.median(flux),
-                         self.fluxerror/np.median(flux),
-                         marker=' ', color='k', ls='-', drawstyle='steps' )
-        else :
-            pl.plot( self.wave, flux/np.median(flux),
-                     marker=' ', color='k', ls='-', drawstyle='steps' )
-        pl.draw()
-        pl.show()
-        return()
-
-
-    def plotlines( self, z=0.0, lineset='sdss', smooth=0, showerr=False):
-        """Interactive line matching.
-        h for help, q to quit"""
-        pl.clf()
-        self.plotspec(smooth=smooth, showerr=showerr)
-        if lineset!='none':
-            marklines( z, lineset )
-
-    def matchlines(self, z=1, lineset='sdss', smooth=0, showerr=False):
-        interact(
-            self.plotlines, z=z, lineset=lineset, smooth=smooth,
-            showerr=showerr)
 
 
     def bin( self, binwidth=10, wstart=0, wend=0 ):
@@ -207,6 +151,77 @@ class Spectrum(object):
         self.fluxerror_binned = df
         self.wave_binsize = dw
         return
+
+
+    def plotspec(self, skyfile=None, smooth=False,
+                 smoothwindow=0, showerr=False):
+        """ plot the source spectrum and the sky spectrum """
+        # medsmooth = lambda f,N : array( [ median( f[max(0,i-N):min(len(f),max(0,i-N)+2*N)]) for i in range(len(f)) ] )
+
+        specfile = self.filename
+
+        # TODO: this should be more general
+        if skyfile :
+            # lower axes : sky
+            ax2 = pl.axes([0.03,0.05,0.95,0.2])
+            skywave, skyflux = np.loadtxt( skyfile, unpack=True, usecols=[0,1] )
+            pl.plot( skywave, skyflux , color='darkgreen',
+                  ls='-', drawstyle='steps' )
+            ax1 = pl.axes([0.03,0.25,0.95,0.63], sharex=ax2)
+
+        # upper axes : source
+        # TODO : better smoothing !!!
+        # if smoothwindow : flux = medsmooth( flux, smoothwindow )
+        if smooth :
+            if smoothwindow<5 :
+                smoothwindow=5
+                order=3
+                print("raising S-G smoothwindow window to 5, order 3.")
+            if smoothwindow<7 :
+                order=3
+            else :
+                order=5
+            flux = savitzky_golay(self.flux, smoothwindow, order=order)
+        else :
+            flux = self.flux
+
+        if showerr :
+            pl.errorbar( self.wave, flux/np.median(flux),
+                         self.fluxerror/np.median(flux),
+                         marker=' ', color='k', ls='-', drawstyle='steps' )
+        else :
+            pl.plot( self.wave, flux/np.median(flux),
+                     marker=' ', color='k', ls='-', drawstyle='steps' )
+        pl.draw()
+        pl.show()
+        return()
+
+
+    def plotlines( self, z=0.0, lineset='sdss',
+                   smooth=False, smoothwindow=11,
+                   showerr=False):
+        """Interactive line matching.
+        h for help, q to quit"""
+        pl.clf()
+        self.plotspec(smoothwindow=smooth, showerr=showerr)
+        if lineset!='none':
+            marklines( z, lineset )
+
+    def matchlines(self, z=1.0, lineset='sdss',
+                   smooth=False, smoothwindow=11, showerr=False):
+        interact(
+            self.plotlines,
+            z=widgets.FloatSlider(min=0.0,max=11.0,step=0.1,value=z),
+            lineset=widgets.Select(
+                options=['sdss','sn','ia','abs','agn','em','sky','CuAr'],
+                description='Line list:',
+                value=lineset,
+                disabled = False),
+            smooth=smooth,
+            smoothwindow=widgets.IntSlider(
+                min=5,max=75,step=2,value=smoothwindow),
+            showerr=showerr)
+
 
 
 def binspecdat( wavelength, flux, fluxerr=[], binwidth=10, sigclip=0, sumerrs=False,
