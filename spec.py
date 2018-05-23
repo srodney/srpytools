@@ -1,26 +1,212 @@
+from __future__ import print_function
 # S.Rodney
 # 2010.06.04
 # working with 1-d fits files of spectra
 from matplotlib import pyplot as pl
 import numpy as np
+import os
+import exceptions
+from astropy.io import fits as pyfits
+
+from ipywidgets import interact, interactive, fixed, interact_manual
+import ipywidgets as widgets
+
+class Spectrum(object):
+    """A class for a 1-d spectrum object"""
+    def __init__(self, filename, **kwargs):
+        self.filename = filename
+        self.wave = np.array([])
+        self.flux = np.array([])
+        self.fluxerror = np.array([])
+        self.waveunit = None
+
+        if not os.path.isfile(filename):
+            raise exceptions.RuntimeError("No file %s"%filename)
+        if self.filename.endswith('.fits'):
+            self.rdspecfits(**kwargs)
+        elif self.filename.endswith('.dat') or self.filename.endswith('.txt'):
+            self.rdspecdat(**kwargs)
 
 
-def binspecfile( specdatfile, binwidth=10, wstart=0, wend=0 ):
-    """ read in the spectrum from the given 
-    spec.dat file, bin it up and return the binned
-    wavelength and flux values.
-    binwidth is in the wavelength units of the specdatfile
-      (typically Angstroms)
-    """
-    import numpy
-    try : 
-        w,f,e = numpy.loadtxt( specdatfile, unpack=True )
-    except:
-        w,f = numpy.loadtxt( specdatfile, unpack=True )
-        e = []
+    def rdspecfits(self, ext='SCI', verbose=False ):
+        """
+        read in a 1-d spectrum from a fits file.
+        stores wavelength and flux as numpy arrays
+        """
+        # TODO : read in flux uncertainty array when available
 
-    wbinned, dw, fbinned, df  = binspecdat( w, f, e, binwidth=binwidth, wstart=wstart,wend=wend)
-    return( wbinned, fbinned, df )
+        hdulist = pyfits.open(self.filename)
+
+        try :
+            # reading a DEEP2/DEEP3 spectrum
+            extroot='BXSPF'
+            wb,fb,eb = hdulist['%s-B'%extroot].data[0][1], hdulist['%s-B'%extroot].data[0][0], hdulist['%s-B'%extroot].data[0][2]
+            wr,fr,er = hdulist['%s-R'%extroot].data[0][1], hdulist['%s-R'%extroot].data[0][0], hdulist['%s-R'%extroot].data[0][2]
+            return( np.append( wb, wr ), np.append( fb,fr ), np.append( eb,er) )
+        except :
+            pass
+
+        # determine the wavelength range
+        # covered by this spectrum
+        if len(hdulist) == 1 : ext = 0
+        refwave = hdulist[ext].header['CRVAL1']
+        refpix =  hdulist[ext].header['CRPIX1']
+        if 'CD1_1' in hdulist[ext].header.keys() :
+            dwave =   hdulist[ext].header['CD1_1']
+        elif 'CDELT1' in hdulist[ext].header.keys() :
+            dwave =   hdulist[ext].header['CDELT1']
+        else :
+            raise exceptions.RuntimeError(
+                "wavelength step keyword not found")
+
+        nwave =   hdulist[ext].header['NAXIS1']
+        nap  =    hdulist[ext].header['NAXIS']
+        widx = np.arange( nwave )
+        wave = (widx - (refpix-1))*dwave + refwave
+        flux = []
+        if nap>1:
+            for i in range( nap ):
+                flux.append( hdulist[ext].data[i] )
+        else :
+            flux = hdulist[ext].data
+        self.wave = wave
+        self.flux = flux
+
+        # TODO : check for flux uncertainty array
+        self.fluxerror = np.zeros(len(self.flux))
+
+        return
+
+    def rdspecdat(self):
+        """Read in a 1-D spectrum from a .dat or .txt file -- an ASCII text
+        file with 2 or 3 columns, holding the wavelength, flux and optionally
+        the flux uncertainty.
+        """
+        # TODO : ugh. this is crude. Should have some checks for file format
+        # and probably better to use the astropy.io functions now.
+        try:
+            w, f, e = np.loadtxt(self.filename, unpack=True)
+        except:
+            w, f = np.loadtxt(self.filename, unpack=True)
+            e = []
+
+
+    def plotlines_interactive( self, skyfile=None, z=0.0, lineset='sdss',
+                    smooth=0, showerr=False):
+        """Interactive line matching.
+        h for help, q to quit"""
+        specfile = self.filename
+
+        pl.ion()
+        pl.clf()
+        self.plotspec(skyfile=skyfile, smooth=smooth)
+        userin=''
+        print( __doc__ )
+        print("z=%.3f %s"%(z,lineset))
+        while userin!='q' :
+            userin=raw_input('')
+            if userin=='q': break
+            elif userin.startswith('z') :
+                z = float( userin.split()[1] )
+                pl.clf()
+                self.plotspec(skyfile, smooth=smooth, showerr=showerr)
+                if lineset!='none':marklines( z, lineset )
+                pl.draw()
+                print("re-plottd at z=%.3f"%z)
+            elif userin.startswith('l') :
+                lineset = userin.split()[1]
+                pl.clf()
+                self.plotspec(skyfile, smooth=smooth, showerr=showerr)
+                if lineset != 'none' : marklines( z, lineset )
+            elif userin.startswith('s') :
+                smooth = int( userin.split()[1] )
+                pl.clf()
+                self.plotspec(skyfile, smooth=smooth, showerr=showerr)
+                if lineset!='none': marklines( z, lineset )
+            elif userin=='h':
+                print(""" 
+    q : quit
+    h : help
+    z <zval> : set z 
+    l <linelist> : set line list [sdss,abs,em,sky,CuAr,none,SNIa]
+    s <npix> : apply median smoothing, radius N pix
+    """)
+        return( z )
+
+    def plotspec(self, skyfile=None, smooth=0, showerr=False):
+        """ plot the source spectrum and the sky spectrum """
+        # medsmooth = lambda f,N : array( [ median( f[max(0,i-N):min(len(f),max(0,i-N)+2*N)]) for i in range(len(f)) ] )
+
+        specfile = self.filename
+
+        # TODO: this should be more general
+        if skyfile :
+            # lower axes : sky
+            ax2 = pl.axes([0.03,0.05,0.95,0.2])
+            skywave, skyflux = np.loadtxt( skyfile, unpack=True, usecols=[0,1] )
+            pl.plot( skywave, skyflux , color='darkgreen',
+                  ls='-', drawstyle='steps' )
+            ax1 = pl.axes([0.03,0.25,0.95,0.63], sharex=ax2)
+
+        # upper axes : source
+        # TODO : better smoothing !!!
+        # if smooth : flux = medsmooth( flux, smooth )
+        if smooth :
+            if smooth<5 :
+                smooth=5
+                order=3
+                print("raising S-G smooth window to 5, order 3.")
+            if smooth<7 :
+                order=3
+            else :
+                order=5
+            flux = savitzky_golay( self.flux, smooth, order=order )
+        else :
+            flux = self.flux
+
+        if showerr :
+            pl.errorbar( self.wave, flux/np.median(flux),
+                         self.fluxerror/np.median(flux),
+                         marker=' ', color='k', ls='-', drawstyle='steps' )
+        else :
+            pl.plot( self.wave, flux/np.median(flux),
+                     marker=' ', color='k', ls='-', drawstyle='steps' )
+        pl.draw()
+        pl.show()
+        return()
+
+
+    def plotlines( self, z=0.0, lineset='sdss', smooth=0, showerr=False):
+        """Interactive line matching.
+        h for help, q to quit"""
+        pl.clf()
+        self.plotspec(smooth=smooth, showerr=showerr)
+        if lineset!='none':
+            marklines( z, lineset )
+
+    def matchlines(self, z=1, lineset='sdss', smooth=0, showerr=False):
+        interact(
+            self.plotlines, z=z, lineset=lineset, smooth=smooth,
+            showerr=showerr)
+
+
+    def bin( self, binwidth=10, wstart=0, wend=0 ):
+        """ bin the spectrum in units of width binwidth
+        binwidth is in the wavelength units of the spectrum
+          (typically Angstroms)
+        """
+        # TODO : handle units more robustly -- ask user for units, check
+        # against the units specfied in the input file or by the user, etc.
+        w = self.wave
+        f = self.flux
+        e = self.fluxerror
+        wbinned, dw, fbinned, df  = binspecdat(
+            w, f, e, binwidth=binwidth, wstart=wstart,wend=wend)
+        self.wave_binned = wbinned
+        self.flux_binned = fbinned
+        self.fluxerror_binned = df
+        self.wave_binsize = dw
+        return
 
 
 def binspecdat( wavelength, flux, fluxerr=[], binwidth=10, sigclip=0, sumerrs=False,
@@ -194,49 +380,6 @@ def isigclip( valarray, sigclip, igood=[], maxiter=10, thisiter=0 ) :
     return( igood )
 
 
-def rdspecfits( specfitsfile, ext='SCI', verbose=False ):
-    """
-    read in a 1-d spectrum from a fits file.  
-    returns wavelength and flux as numpy arrays
-    """
-    from numpy import arange, zeros
-    import exceptions
-    import pyfits
-    hdulist = pyfits.open( specfitsfile ) 
-
-    try : 
-        # reading a DEEP2/DEEP3 spectrum
-        extroot='BXSPF'
-        wb,fb,eb = hdulist['%s-B'%extroot].data[0][1], hdulist['%s-B'%extroot].data[0][0], hdulist['%s-B'%extroot].data[0][2]
-        wr,fr,er = hdulist['%s-R'%extroot].data[0][1], hdulist['%s-R'%extroot].data[0][0], hdulist['%s-R'%extroot].data[0][2]
-        return( np.append( wb, wr ), np.append( fb,fr ), np.append( eb,er) )
-    except : 
-        pass
-
-    # determine the wavelength range 
-    # covered by this spectrum 
-    if len(hdulist) == 1 : ext = 0
-    refwave = hdulist[ext].header['CRVAL1']
-    refpix =  hdulist[ext].header['CRPIX1']
-    if 'CD1_1' in hdulist[ext].header.keys() :
-        dwave =   hdulist[ext].header['CD1_1']
-    elif 'CDELT1' in hdulist[ext].header.keys() :
-        dwave =   hdulist[ext].header['CDELT1']
-    else :
-        raise exceptions.RuntimeError(
-            "wavelength step keyword not found")
-
-    nwave =   hdulist[ext].header['NAXIS1']
-    nap  =    hdulist[ext].header['NAXIS']
-    widx = arange( nwave )
-    wave = (widx - (refpix-1))*dwave + refwave
-    flux = []
-    if nap>1:
-        for i in range( nap ):
-            flux.append( hdulist[ext].data[i] )
-    else : 
-        flux = hdulist[ext].data
-    return( wave, flux )
 
 
 def specfits2dat( specfitsfile, specdatfile ):
@@ -337,82 +480,6 @@ s <npix> : apply median smoothing, radius N pix (odd numbers only)
     
 
 
-def matchlines( specfile, skyfile=None, z=0.0, lineset='sdss', smooth=0, showerr=False):
-    """Interactive line matching.
-    h for help, q to quit"""
-    pl.ion()
-    pl.clf()
-    plotspecsky( specfile, skyfile=skyfile, smooth=smooth )
-    userin=''
-    print( matchlines.__doc__ )
-    print("z=%.3f %s"%(z,lineset))
-    while userin!='q' : 
-        userin=raw_input('')
-        if userin=='q': break
-        elif userin.startswith('z') :
-            z = float( userin.split()[1] )
-            pl.clf()
-            plotspecsky( specfile, skyfile, smooth=smooth, showerr=showerr )
-            if lineset!='none':marklines( z, lineset )
-            pl.draw()
-            print("re-plottd at z=%.3f"%z)
-        elif userin.startswith('l') :
-            lineset = userin.split()[1]
-            pl.clf()
-            plotspecsky( specfile, skyfile, smooth=smooth, showerr=showerr )
-            if lineset != 'none' : marklines( z, lineset )
-        elif userin.startswith('s') :
-            smooth = int( userin.split()[1] )
-            pl.clf()
-            plotspecsky( specfile, skyfile, smooth=smooth, showerr=showerr )
-            if lineset!='none': marklines( z, lineset )
-        elif userin=='h':
-            print(""" 
-q : quit
-h : help
-z <zval> : set z 
-l <linelist> : set line list [sdss,abs,em,sky,CuAr,none,SNIa]
-s <npix> : apply median smoothing, radius N pix
-""")
-    return( z )
-
-def plotspecsky( specfile, skyfile=None, smooth=0, showerr=False ):
-    """ plot the source spectrum and the sky spectrum """
-    # medsmooth = lambda f,N : array( [ median( f[max(0,i-N):min(len(f),max(0,i-N)+2*N)]) for i in range(len(f)) ] )
-
-    if skyfile : 
-        # lower axes : sky
-        ax2 = pl.axes([0.03,0.05,0.95,0.2])
-        skywave, skyflux = np.loadtxt( skyfile, unpack=True, usecols=[0,1] )
-        pl.plot( skywave, skyflux , color='darkgreen',
-              ls='-', drawstyle='steps' )
-        ax1 = pl.axes([0.03,0.25,0.95,0.63], sharex=ax2)
-
-    # upper axes : source 
-    # TODO : better smoothing !!!
-    try : 
-        wave, flux, fluxerr = np.loadtxt( specfile, unpack=True, usecols=[0,1,2] )
-    except : 
-        wave, flux = np.loadtxt( specfile, unpack=True, usecols=[0,1] )
-        fluxerr = np.zeros( len(flux) )
-    # if smooth : flux = medsmooth( flux, smooth )
-    if smooth : 
-        if smooth<5 : 
-            smooth=5
-            order=3
-            print("raising S-G smooth window to 5, order 3.")
-        if smooth<7 : 
-            order=3
-        else : 
-            order=5
-        flux = savitzky_golay( flux, smooth, order=order )
-    if showerr : 
-        pl.errorbar( wave, flux/np.median(flux), fluxerr/np.median(flux), marker=' ', color='k', ls='-', drawstyle='steps' )
-    else : 
-        pl.plot( wave, flux/np.median(flux), marker=' ', color='k', ls='-', drawstyle='steps' )
-    #draw()
-    #show()
-    return()
 
 def plotspecSNIa( specfile, age=0, z=1, smooth=0, showerr=False, scale=0, color='k' ):
     """ plot the source spectrum and overlay a SN spectrum """
@@ -668,8 +735,6 @@ def ccm_unred(wave, flux, ebv, r_v=""):
 
     
 def marklines( z, lineset, telluric=True ):
-    import rcpar
-    #rcpar.usetex()
 
     if lineset=='sdss' : lineset = sdsslines
     elif lineset=='sn' : lineset = snialines
