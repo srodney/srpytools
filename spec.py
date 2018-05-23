@@ -11,21 +11,32 @@ from astropy.io import fits as pyfits
 from ipywidgets import interact, interactive, fixed, interact_manual
 import ipywidgets as widgets
 
+# TODO: Improve the MultiSpectrum class, for stitching together spectra of the same object covering different wavelength ranges (see TODO items in the class definition below)
+
+# TODO: add more info to the interactive output plots, like the linelist, z, etc.
+
+# TODO : handle the flux uncertainty properly when plotting
+# TODO : handle the flux uncertainty properly when binning
+
+# TODO : don't plot line labels that are beyond the extent of the min and max wavelength for plotting
+
+
 class Spectrum(object):
     """A class for a 1-d spectrum object"""
-    def __init__(self, filename, **kwargs):
+    def __init__(self, filename=None, **kwargs):
         self.filename = filename
         self.wave = np.array([])
         self.flux = np.array([])
         self.fluxerror = np.array([])
         self.waveunit = None
 
-        if not os.path.isfile(filename):
-            raise exceptions.RuntimeError("No file %s"%filename)
-        if self.filename.endswith('.fits'):
-            self.rdspecfits(**kwargs)
-        elif self.filename.endswith('.dat') or self.filename.endswith('.txt'):
-            self.rdspecdat(**kwargs)
+        if filename is not None:
+            if not os.path.isfile(filename):
+                raise exceptions.RuntimeError("No file %s"%filename)
+            if self.filename.endswith('.fits'):
+                self.rdspecfits(**kwargs)
+            elif self.filename.endswith('.dat') or self.filename.endswith('.txt'):
+                self.rdspecdat(**kwargs)
 
 
     def rdspecfits(self, ext='SCI', verbose=False ):
@@ -153,12 +164,17 @@ class Spectrum(object):
         return
 
 
-    def plotspec(self, skyfile=None, smooth=False,
-                 smoothwindow=0, showerr=False):
+    def plotspec(self, skyfile='', smooth=False,
+                 smoothwindow=0, showerr=False,
+                 zlines=0.0, lineset='none',
+                 plotwavemin=0, plotwavemax=0,
+                 plotfluxmin=0, plotfluxmax=0):
         """ plot the source spectrum and the sky spectrum """
         # medsmooth = lambda f,N : array( [ median( f[max(0,i-N):min(len(f),max(0,i-N)+2*N)]) for i in range(len(f)) ] )
 
-        specfile = self.filename
+
+        pl.clf()
+        lineset= lineset.lower()
 
         # TODO: this should be more general
         if skyfile :
@@ -192,26 +208,35 @@ class Spectrum(object):
         else :
             pl.plot( self.wave, flux/np.median(flux),
                      marker=' ', color='k', ls='-', drawstyle='steps' )
-        pl.draw()
-        pl.show()
-        return()
 
-
-    def plotlines( self, z=0.0, lineset='sdss',
-                   smooth=False, smoothwindow=11,
-                   showerr=False):
-        """Interactive line matching.
-        h for help, q to quit"""
-        pl.clf()
-        self.plotspec(smoothwindow=smooth, showerr=showerr)
         if lineset!='none':
-            marklines( z, lineset )
+            marklines( zlines, lineset )
 
-    def matchlines(self, z=1.0, lineset='sdss',
+        if plotwavemin==0:
+            plotwavemin = self.wave.min()
+        if plotwavemax==0:
+            plotwavemin = self.wave.max()
+        if plotfluxmin==0:
+            plotfluxmin = -np.std(flux)
+        if plotfluxmax==0:
+            plotfluxmax = flux.max() + np.std(flux)
+
+        ax = pl.gca()
+        ax.set_xlim(plotwavemin, plotwavemax)
+        ax.set_ylim(plotfluxmin, plotfluxmax)
+
+        #pl.draw()
+        #pl.show()
+        return
+
+
+    def matchlines(self, zlines=1.0, lineset='sdss',
                    smooth=False, smoothwindow=11, showerr=False):
         interact(
-            self.plotlines,
-            z=widgets.FloatSlider(min=0.0,max=11.0,step=0.1,value=z),
+            self.plotspec,
+            zlines=widgets.FloatSlider(min=0.0, max=11.0, step=0.1,
+                                       value=zlines,
+                                       description='Redshift guess'),
             lineset=widgets.Select(
                 options=['sdss','sn','ia','abs','agn','em','sky','CuAr'],
                 description='Line list:',
@@ -220,7 +245,35 @@ class Spectrum(object):
             smooth=smooth,
             smoothwindow=widgets.IntSlider(
                 min=5,max=75,step=2,value=smoothwindow),
-            showerr=showerr)
+            showerr=showerr,
+            plotfluxmin=-np.std(self.flux),
+            plotfluxmax=np.max(self.flux)+np.std(self.flux),
+            plotwavemin=self.wave.min(), plotwavemax=self.wave.max()
+        )
+
+
+class MultiSpectrum(Spectrum):
+    """A spectrum with data drawn from multiple data files"""
+    def __init__(self, specfilelist, **kwargs):
+        self.filename = None
+        self.filenamelist = specfilelist
+        self.wave = np.array([])
+        self.flux = np.array([])
+        self.fluxerror = np.array([])
+        self.waveunit = None
+
+        # TODO : make this more robust:
+        #  TODO: check input wavelength range,
+        #  TODO: check for wavelength overlap
+        #  TODO: allow user to clip the input spectra
+        #  TODO: apply a flux normalization to smoothly join spectra
+        #  TODO: allow user to specify flux normalization
+
+        for specfile in specfilelist:
+            inputspec = Spectrum(specfile, **kwargs)
+            self.wave = np.append(self.wave, inputspec.wave)
+            self.flux = np.append(self.flux, inputspec.flux)
+            self.fluxerror = np.append(self.fluxerror, inputspec.fluxerror)
 
 
 
@@ -400,8 +453,8 @@ def isigclip( valarray, sigclip, igood=[], maxiter=10, thisiter=0 ) :
 def specfits2dat( specfitsfile, specdatfile ):
     """ convert a 1-d spectrum fits file directly
     to a two-column ascii data text file """
-    wave, flux = rdspecfits( specfitsfile )[:2]
-    wspec2dat( wave, flux, specdatfile )
+    spec = Spectrum( specfitsfile )
+    wspec2dat( spec.wave, spec.flux, specdatfile )
     return( specdatfile )
 
 
